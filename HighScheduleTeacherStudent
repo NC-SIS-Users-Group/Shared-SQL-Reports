@@ -1,0 +1,69 @@
+/*
+    Generates a student schedule matrix for the selected calendar and school year. 
+  Matrix contains staff assignments as documented in the Section Staff History.
+
+    - Retrieves student roster records along with course, period, and term information.
+    - Maps terms Q1 → Fall and Q3 → Spring.
+    - Organizes courses into period-based columns for Fall and Spring semesters.
+    - Returns one row per student with course assignments displayed by term and period.
+
+    Output columns:
+        Fall 1-4   = Courses scheduled during Fall (Q1) by period
+        Spring 1-4 = Courses scheduled during Spring (Q3) by period
+*/
+
+DECLARE @calendarID INT = NULLIF({selectedCalendar}, 0),
+        @endYear INT = {selectedEndYear};
+
+WITH StudentSchedule AS (
+    SELECT
+        r.personID,
+        s.lastName + ', ' + s.firstName AS studentName,
+        p.name AS periodName,
+        vcs.courseName,
+		vcs.teacherDisplay,
+		
+		CASE 
+		WHEN t.name LIKE 'Q1' THEN 'Fall' 
+		WHEN t.name LIKE 'Q3' THEN 'Spring' 
+		ELSE 'Other' END AS termName
+
+    FROM Roster r
+
+    INNER JOIN student s
+        ON r.personID = s.personID
+
+    INNER JOIN v_ClassSection vcs
+        ON r.sectionID = vcs.sectionID
+        AND vcs.endYear = @endYear
+        AND vcs.calendarID = @calendarID
+
+    LEFT JOIN SectionPlacement sp
+        ON r.sectionID = sp.sectionID
+
+    -- ? join Term table using termID
+    LEFT JOIN Term t
+        ON sp.termID = t.termID
+
+    LEFT JOIN Period p
+        ON sp.periodID = p.periodID
+)
+
+SELECT
+    studentName,
+
+    /* Fall */
+MAX(CASE WHEN termName = 'Fall'   AND periodName = '1' THEN courseName + ' (' + teacherDisplay + ')' END) AS [Fall 1],
+MAX(CASE WHEN termName = 'Fall'   AND periodName = '2' THEN courseName + ' (' + teacherDisplay + ')' END) AS [Fall 2],
+MAX(CASE WHEN termName = 'Fall'   AND periodName = '3' THEN courseName + ' (' + teacherDisplay + ')' END) AS [Fall 3],
+MAX(CASE WHEN termName = 'Fall'   AND periodName = '4' THEN courseName + ' (' + teacherDisplay + ')' END) AS [Fall 4],
+
+/* Spring */
+MAX(CASE WHEN termName = 'Spring' AND periodName = '1' THEN courseName + ' (' + teacherDisplay + ')' END) AS [Spring 1],
+MAX(CASE WHEN termName = 'Spring' AND periodName = '2' THEN courseName + ' (' + teacherDisplay + ')' END) AS [Spring 2],
+MAX(CASE WHEN termName = 'Spring' AND periodName = '3' THEN courseName + ' (' + teacherDisplay + ')' END) AS [Spring 3],
+MAX(CASE WHEN termName = 'Spring' AND periodName = '4' THEN courseName + ' (' + teacherDisplay + ')' END) AS [Spring 4]
+
+FROM StudentSchedule
+GROUP BY studentName
+ORDER BY studentName;
