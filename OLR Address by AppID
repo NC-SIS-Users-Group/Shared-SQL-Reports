@@ -1,0 +1,23 @@
+SELECT
+    a.olr_applicationID AS ApplicationID,
+    CONCAT(a.firstname, ' ', a.lastname) AS StudentName,
+    CONCAT(
+        CASE
+            WHEN adr.postOfficeBox = 1
+                THEN 'PO Box '
+            ELSE ''
+        END,
+        COALESCE(adr.number + ' ', ''),
+        COALESCE(adr.prefix + ' ', ''),
+        COALESCE(adr.street + ' ', ''),
+        COALESCE(adr.tag + ' ', ''),
+        COALESCE(adr.dir + ' ', ''),
+        COALESCE(adr.apt, '')
+    ) AS StreetAddress,
+    adr.city,
+    adr.state,
+    adr.zip,
+    adr.county
+FROM olr_application a
+LEFT JOIN olr_address adr
+    ON a.olr_applicationID = adr.olr_applicationID;
