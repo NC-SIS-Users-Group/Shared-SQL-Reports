@@ -1,0 +1,178 @@
+/*
+    Student Attendance Tier Report
+
+    Purpose:
+    Calculates student attendance rates based on the instructional days a student
+    was actively enrolled and assigns an attendance intervention tier.
+
+    Process:
+    1. Identifies active trials for the selected calendar.
+    2. Determines the primary schedule structure for each calendar.
+    3. Establishes each section's active enrollment span using term dates.
+    4. Resolves student roster start/end dates, defaulting to section term spans
+       when roster dates are not available.
+    5. Generates all instructional days during each student's enrollment period.
+    6. Aggregates attendance data from v_AttDayDetail_Approx to calculate:
+         - Enrolled instructional days
+         - Total absent days
+         - Total unexcused absent days
+         - Overall absence rate
+    7. Assigns students to attendance tiers:
+         - Foundational: < 5% absence rate
+         - Tier 1: 5% to < 7.5%
+         - Tier 2: 7.5% to < 10%
+         - Tier 3: ≥ 10%
+    8. Returns attendance metrics and tier assignments for students enrolled
+       more than 10 instructional days during the selected school year.
+
+    Parameters:
+        {selectedCalendar} - Optional calendar filter (0 = all calendars)
+        {selectedEndYear}  - School year (end year) to report
+
+    Output:
+        Student demographic information, enrollment-adjusted attendance totals,
+        absence percentage, and attendance intervention tier.
+*/
+
+DECLARE @calendarID INT = NULLIF({selectedCalendar},0),
+        @endYear INT = {selectedEndYear},
+        @asof datetime2 = SYSDATETIME();
+
+;WITH ActiveTrial AS (
+    SELECT trialID, calendarID
+    FROM dbo.Trial
+    WHERE active = 1
+      AND (@calendarID IS NULL OR calendarID = @calendarID)
+),
+
+PrimaryStructure AS (
+    SELECT ss.calendarID, ss.structureID
+    FROM dbo.ScheduleStructure ss
+    INNER JOIN dbo.TermSchedule ts 
+        ON ts.structureID = ss.structureID
+    INNER JOIN ActiveTrial at 
+        ON at.calendarID = ss.calendarID
+    WHERE ts.[primary] = 1
+),
+
+SectionTermSpan AS (
+    SELECT
+        sn.sectionID,
+        sn.trialID,
+        at.calendarID,
+        MIN(tm.startDate) AS termSpanStart,
+        @asof   AS termSpanEnd
+    FROM dbo.Section sn
+    INNER JOIN ActiveTrial at 
+        ON at.trialID = sn.trialID
+    INNER JOIN dbo.SectionPlacement sp
+        ON sp.sectionID = sn.sectionID
+       AND sp.trialID   = sn.trialID
+    INNER JOIN PrimaryStructure ps 
+        ON ps.calendarID = at.calendarID
+    INNER JOIN dbo.TermSchedule ts 
+        ON ts.structureID = ps.structureID
+    INNER JOIN dbo.Term tm 
+        ON tm.termScheduleID = ts.termScheduleID
+       AND tm.termID         = sp.termID
+    GROUP BY
+        sn.sectionID,
+        sn.trialID,
+        at.calendarID
+),
+
+RosterResolved AS (
+    SELECT
+        ro.personID,
+        std.calendarID,
+        COALESCE(ro.startDate, std.termSpanStart) AS rosterStart,
+        COALESCE(ro.endDate,   std.termSpanEnd)   AS rosterEnd
+    FROM dbo.Roster ro
+    INNER JOIN SectionTermSpan std 
+        ON std.sectionID = ro.sectionID
+       AND std.trialID   = ro.trialID
+),
+
+StudentInstructionalDates AS (
+    SELECT DISTINCT
+        rr.personID,
+        rr.calendarID,
+        d.date
+    FROM RosterResolved rr
+    INNER JOIN PrimaryStructure ps 
+        ON ps.calendarID = rr.calendarID
+    INNER JOIN dbo.Day d
+        ON d.structureID = ps.structureID
+       AND d.calendarID  = rr.calendarID
+       AND d.instruction = 1
+       AND d.date >= rr.rosterStart
+       AND d.date <= rr.rosterEnd
+),
+
+StudentAgg AS (
+    SELECT
+        sid.personID,
+        sid.calendarID,
+
+        COUNT(*) AS enrolledInstructionalDays,
+
+        SUM(COALESCE(ada.absentDay, 0))          AS absentDays,
+        SUM(COALESCE(ada.unexcusedAbsentDay, 0)) AS unexcusedAbsentDays,
+
+        CAST(SUM(COALESCE(ada.absentDay, 0)) AS DECIMAL(10,4)) 
+        / NULLIF(COUNT(*),0) AS absenceRate
+
+    FROM StudentInstructionalDates sid
+    LEFT JOIN dbo.v_AttDayDetail_Approx ada
+        ON ada.personID  = sid.personID
+       AND ada.calendarID = sid.calendarID
+       AND ada.date = sid.date
+    GROUP BY
+        sid.personID,
+        sid.calendarID
+),
+
+AbsTier AS (
+    SELECT 
+        sa.personID,
+        sa.calendarID,
+        sa.absenceRate,
+        CASE
+            WHEN sa.absenceRate < 0.05 THEN 'Foundational'
+            WHEN sa.absenceRate < 0.075 THEN 'Tier 1'
+            WHEN sa.absenceRate < 0.10 THEN 'Tier 2'
+            ELSE 'Tier 3'
+        END AS tier
+    FROM StudentAgg sa
+)
+
+SELECT
+    i.lastName        AS [Last Name],
+    i.firstName       AS [First Name],
+    p.studentNumber   AS [Student Number],
+    cal.name          AS [Calendar Name],
+
+    sa.enrolledInstructionalDays AS [Instructional Days Enrolled],
+    sa.absentDays                AS [Absent Days],
+
+    CAST(sa.absenceRate * 100.0 AS DECIMAL(5,2)) AS [Absence %],
+
+    at.tier AS [Absence Tier]
+
+FROM StudentAgg sa
+INNER JOIN AbsTier at 
+    ON at.personID = sa.personID
+   AND at.calendarID = sa.calendarID
+
+INNER JOIN dbo.Person p       ON p.personID = sa.personID
+INNER JOIN dbo.[Identity] i   ON i.identityID = p.currentIdentityID
+INNER JOIN dbo.Calendar cal   ON cal.calendarID = sa.calendarID
+
+WHERE sa.enrolledInstructionalDays > 10
+  AND cal.endYear = @endYear
+
+ORDER BY
+    at.tier,
+    cal.name,
+    i.lastName,
+    i.firstName;
