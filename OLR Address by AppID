@@ -1,3 +1,16 @@
+/*
+    Returns one row per address associated with an OLR application.
+
+    - Joins olr_application to olr_address using olr_applicationID.
+    - Displays the application ID and student name from the application record.
+    - Formats addresses as either:
+        • "PO Box <number>" when postOfficeBox = 1
+        • Standard street address using number, prefix, street, tag, direction, and apartment fields otherwise.
+    - Includes city, state, ZIP code, and county information.
+    - Uses a LEFT JOIN so applications are returned even if no address records exist.
+    - Multiple addresses for the same application will appear as separate rows.
+*/
+
 SELECT
     a.olr_applicationID AS ApplicationID,
     CONCAT(a.firstname, ' ', a.lastname) AS StudentName,
