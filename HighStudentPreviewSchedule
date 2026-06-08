@@ -1,5 +1,5 @@
 /*
-    Generates a student schedule matrix for the selected calendar and school year.
+    Generates a student schedule matrix for the selected calendar and school year WITHOUT teacher names. 
 
     - Retrieves student roster records along with course, period, and term information.
     - Maps terms Q1 → Fall and Q3 → Spring.
